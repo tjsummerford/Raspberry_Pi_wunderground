@@ -6,54 +6,60 @@ import sys
 import time
 from datetime import datetime
 import httplib
+import urllib
+import Adafruit_DHT
 
 # ===========================================================
 # Configuration options
 # ===========================================================
 
-# Sensor information, see Adafruit driver documentation
-sensor_type = "2302"
-sensor_gpio = "4"
+# Type of sensor, can be Adafruit_DHT.DHT11, Adafruit_DHT.DHT22, or Adafruit_DHT.AM2302.
+DHT_TYPE = Adafruit_DHT.DHT22
+DHT_PIN  = 6
+
 # Time between posting readings to wunderground
 delay = 600
-# Wunderground personal weather station ID/password
-stationid = "your_station_ID_here"
-password = "your_password_here"
 
+# Wunderground personal weather station ID/password
+stationid = "your_stationid"
+password = "your_password"
 
 # Loop to continously upload data (with delay)
 while(True):
-  # Run the DHT program to get the humidity and temperature readings, note 
-  sensor_output = subprocess.check_output(["./Adafruit_DHT", sensor_type, sensor_gpio]);
 
-  # search for temperature in sensor output
-  matches = re.search("Temp =\s+([0-9.]+)", sensor_output)
-  if (not matches): #in case reading the sensor fails
-	time.sleep(3)
-	continue
-  temp = float(matches.group(1)) * 1.8 + 32
-  
-  # search for humidity in sensor output
-  matches = re.search("Hum =\s+([0-9.]+)", sensor_output)
-  if (not matches):
-	time.sleep(3)
-	continue
-  humidity = float(matches.group(1))
+        # Attempt to get sensor reading.
+        humidity, temp = Adafruit_DHT.read(DHT_TYPE, DHT_PIN)
 
-  # upload data to Wunderground
-  try:
-        conn = httplib.HTTPConnection("rtupdate.wunderground.com")
-        path = "/weatherstation/updateweatherstation.php?ID=" + stationid + "&PASSWORD=" + password + "&dateutc=" + str(datetime.utcnow()) + "&tempf=" + str(temp) + "&humidity=" + str(humidity) + "&softwaretype=RaspberryPi&action=updateraw"
-        conn.request("GET", path)
-        res = conn.getresponse()
+        # Skip to the next reading if a valid measurement couldn't be taken.
+        # This might happen if the CPU is under a lot of load and the sensor
+        # can't be reliably read (timing is critical to read the sensor).
+        if humidity is None or temp is None:
+                time.sleep(2)
+                continue
 
-        # checks whether there was a successful connection (HTTP code 200 and content of page contains "success")
-        if ((int(res.status) == 200) & ("success" in res.read())):
-                print "%s - Successful Upload\nTemp: %.1f F, Humidity: %.1f %%\nNext upload in %i seconds\n" % (str(datetime.now()), temp, humidity, delay)
-        else:
-                print "%s -- Upload not successful, check username, password, and formating.. Will try again in %i seconds" % (str(datetime.now()), delay)
-  except IOError as e: #in case of any kind of socket error
-        print "{0} -- I/O error({1}): {2} will try again in {3} seconds".format(datetime.now(), e.errno, e.strerror, delay)
+        tempf = (temp * 1.8) + 32
 
-  # Wait before re-uploading data
-  time.sleep(delay)
+        print 'Temperature: {0:0.1f} C'.format(temp)
+        print 'Temperature: {0:0.1f} F'.format(tempf)
+        print 'Humidity:    {0:0.1f} %'.format(humidity)
+
+        # upload data to Wunderground
+        try:
+                qs = {"ID": stationid, "PASSWORD": password, "dateutc": str(datetime.utcnow()), "tempf": tempf, "humidity": humidity, "softwaretype": "RaspberryPi", "action": "updateraw"}
+                conn = httplib.HTTPConnection("weatherstation.wunderground.com")
+                path = "/weatherstation/updateweatherstation.php?"+ urllib.urlencode(qs)
+                conn.request("GET", path)
+                res = conn.getresponse()
+
+                # checks whether there was a successful connection (HTTP code 200 and content of page contains "success")
+                if (int(res.status) == 200):
+                        print "Next upload in %i seconds. Response: %s" % (delay, res.read())
+                else:
+                        print "%s -- Upload not successful, check username, password, and formating. Will try again in %i seconds" % (str(datetime.now()), delay)
+
+        except IOError as e: #in case of any kind of socket error
+                print "{0} -- I/O error({1}): {2} will try again in {3} seconds".format(datetime.now(), e.errno, e.strerror, delay)
+
+
+        # Wait before re-uploading data
+        time.sleep(delay)
